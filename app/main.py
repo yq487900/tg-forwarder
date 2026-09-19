@@ -25,7 +25,9 @@ DATA_DIR = os.environ.get('DATA_DIR', '/data')
 CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 SESSION_PATH = os.path.join(DATA_DIR, 'tg')
 LOG_PATH = os.path.join(DATA_DIR, 'forward.log')
-CONFIG_LOCK = threading.Lock()
+# 用可重入锁：load_config() 在首次运行（还没有 config.json）时会调用 save_config()，
+# 两者都要这把锁；普通 Lock 会在这里自锁死（表现为面板打不开、config.json 一直不生成）。
+CONFIG_LOCK = threading.RLock()
 
 LOG_KEEP_DEFAULT = 500          # 最近记录默认最多保留多少条（超出自动清理，0=不限）
 
