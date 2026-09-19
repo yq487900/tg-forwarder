@@ -57,9 +57,9 @@ jobs:
           images: ${{ steps.dh.outputs.image }}
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
-          # 不打分支名 tag（main 之类和 latest 重复，只会让 tag 列表变乱）
+          # 只打两个 tag：版本号（如 1.0.0）+ latest（跟主分支最新）
+          # 不打分支名 tag（main）也不打次版本别名（1.0），避免同一镜像出现多个重复 tag
 
       - name: Build and push
         uses: docker/build-push-action@v6
