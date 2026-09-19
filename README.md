@@ -210,9 +210,25 @@ bash ./reset_panel_password.sh 我的新密码   # 指定新密码
 ## 从源码构建 / 本地开发
 
 ```bash
-docker compose -f docker-compose.build.yml up -d --build     # 本机构建（用 tg-forwarder:local）
-# 国内网络慢：PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple 写进 .env
+git clone https://github.com/yq487900/tg-forwarder.git && cd tg-forwarder
+bash build_local.sh                                            # 一键构建并起个测试实例
+# 等价于：
+docker compose -f docker-compose.build.yml up -d --build       # 本地镜像 tg-forwarder:local
 ```
+
+构建出来的实例**刻意和正式部署错开**，可以同时跑：容器 `tg-forwarder-local`、端口 `9025`、数据目录 `./data-local`（绝不碰正式部署的 `./data`）。
+
+> 国内网络慢：在同目录建 `.env` 写 `PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple`。
+
+**改了代码怎么发布**（本项目的标准流程）：
+
+```bash
+git commit -am "说明改了什么" && git push          # 推 main → GitHub Actions 自动构建多架构镜像
+# CI 跑完（约 2~4 分钟）后，在用镜像部署的机器上：
+docker compose pull && docker compose up -d        # data/ 不动，登录状态和规则都保留
+```
+
+CI 只在代码有变化时才构建（纯文档改动不触发）；发大版本时打个 tag：`git tag v1.0.1 && git push origin v1.0.1`。
 
 目录结构：
 
@@ -221,7 +237,8 @@ app/main.py             # Flask 面板 + Telethon 后台线程（事件驱动转
 app/templates/          # index.html（面板）/ login.html（登录 + 忘记密码）
 Dockerfile              # python:3.13-slim + telethon/flask（版本固定）
 docker-compose.yml      # 用户侧：直接用现成镜像
-docker-compose.build.yml# 开发侧：从源码构建
+docker-compose.build.yml# 开发侧：从源码构建（容器/端口/数据目录与正式部署错开）
+build_local.sh          # 一键本地构建 + 起测试实例
 reset_panel_password.sh # 忘了密码、又没有恢复码时的兜底脚本（宿主机执行）
 ```
 

@@ -1,5 +1,6 @@
 # 运行时数据（含 TG api_hash、面板密码/恢复码哈希、登录会话、转发记录）—— 绝对不要提交
 data/
+data-local/
 config.json
 forward.log
 *.session
