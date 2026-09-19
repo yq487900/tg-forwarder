@@ -32,6 +32,8 @@ mkdir tg-forwarder && cd tg-forwarder
 docker compose up -d
 ```
 
+镜像：**`xiaoyu96/tg-forwarder:latest`**（Docker Hub，amd64 + arm64）。
+
 打开 `http://<主机IP>:9020`。就这样，不需要装 Python、不需要构建。
 
 ### 第 0 步（必须）：准备 Telegram API ID / Hash

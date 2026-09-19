@@ -11,7 +11,7 @@
 #   SECRET_KEY=一串随机字符        # 会话签名密钥；不设的话容器重启后需要重新登录面板
 services:
   tg-forwarder:
-    image: yq487900/tg-forwarder:latest
+    image: xiaoyu96/tg-forwarder:latest
     container_name: tg-forwarder
     restart: unless-stopped
     ports:
