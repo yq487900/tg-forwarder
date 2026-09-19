@@ -4,6 +4,7 @@
 # 用法：
 #   bash reset_panel_password.sh              # 随机生成一个新密码并打印
 #   bash reset_panel_password.sh 我的新密码    # 指定新密码
+#   bash reset_panel_password.sh --help       # 看帮助（不会改任何东西）
 #
 # 默认配置路径 = 本脚本所在目录下的 data/config.json，
 # 也可以用环境变量指定：TG_CONFIG=/path/to/config.json bash reset_panel_password.sh
@@ -12,6 +13,27 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CFG="${TG_CONFIG:-$HERE/data/config.json}"
+
+usage() {
+  cat <<'EOF'
+用法：
+  bash reset_panel_password.sh                # 随机生成新密码并打印
+  bash reset_panel_password.sh 我的新密码      # 指定新密码
+  TG_CONFIG=/path/data/config.json bash reset_panel_password.sh [新密码]
+
+说明：立即生效（不用重启容器）；会同时生成新的恢复码；其它设备上的旧登录失效。
+EOF
+}
+
+# ⚠️ 安全闸：任何以 - 开头的参数都当选项处理，绝不当作密码。
+# （2026-09-19 踩过：有人拿 --help 跑这个脚本，结果密码被设成字面量 "--help"）
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  -*) echo "❌ 参数不能以 - 开头（看起来像命令行选项）：$1" >&2; usage; exit 2 ;;
+  "") ;;
+  *) [ ${#1} -ge 4 ] || { echo "❌ 新密码太短（至少 4 位）" >&2; exit 2; } ;;
+esac
+
 NEWPW="${1:-}"
 
 python3 - "$CFG" "$NEWPW" <<'PY'
