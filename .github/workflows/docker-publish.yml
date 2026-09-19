@@ -56,10 +56,10 @@ jobs:
         with:
           images: ${{ steps.dh.outputs.image }}
           tags: |
-            type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
+          # 不打分支名 tag（main 之类和 latest 重复，只会让 tag 列表变乱）
 
       - name: Build and push
         uses: docker/build-push-action@v6
