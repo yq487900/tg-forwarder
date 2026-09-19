@@ -1,5 +1,11 @@
 # TG 频道转发（tg-forwarder）
 
+[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-xiaoyu96%2Ftg--forwarder-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/xiaoyu96/tg-forwarder)
+[![Docker Pulls](https://img.shields.io/docker/pulls/xiaoyu96/tg-forwarder)](https://hub.docker.com/r/xiaoyu96/tg-forwarder)
+[![Image Size](https://img.shields.io/docker/image-size/xiaoyu96/tg-forwarder/latest)](https://hub.docker.com/r/xiaoyu96/tg-forwarder/tags)
+[![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-2496ED)](https://hub.docker.com/r/xiaoyu96/tg-forwarder/tags)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 把某个 Telegram 频道的**新消息**，按**关键词正则**过滤后，自动转发到另一个频道。
 **事件驱动**：消息一到就转（秒级），不做定时轮询；**带一个中文 Web 面板**，手机上也能改配置。
 
@@ -24,17 +30,72 @@
 
 ---
 
-## 快速开始（Docker）
+## 快速开始（Docker，复制粘贴即可）
+
+**镜像地址（点这里直达 Docker Hub）**：<https://hub.docker.com/r/xiaoyu96/tg-forwarder>
+
+| | |
+|---|---|
+| 镜像 | `xiaoyu96/tg-forwarder:latest` |
+| 可用 tag | `latest`（最新版）/ `1.0.0`（首个发布版）——两者是同一个镜像 |
+| 架构 | `linux/amd64`、`linux/arm64`（x86 服务器 / 群晖、树莓派等 arm 设备都能跑） |
+| 面板端口 | `9020` |
+| 手动拉取 | `docker pull xiaoyu96/tg-forwarder:latest` |
+
+### 1️⃣ 建目录，把下面这段存成 `docker-compose.yml`
 
 ```bash
-mkdir tg-forwarder && cd tg-forwarder
-# 把仓库里的 docker-compose.yml 放进来（或直接 git clone 本仓库）
-docker compose up -d
+mkdir -p tg-forwarder && cd tg-forwarder
 ```
 
-镜像：**`xiaoyu96/tg-forwarder:latest`**（Docker Hub，amd64 + arm64）。
+```yaml
+services:
+  tg-forwarder:
+    image: xiaoyu96/tg-forwarder:latest
+    container_name: tg-forwarder
+    restart: unless-stopped
+    ports:
+      - "9020:9020"                    # 想换端口就改左边，如 "19020:9020"
+    environment:
+      - TZ=Asia/Shanghai
+      - WEB_PASSWORD=tgforward         # 面板初始密码（首次启动生效）
+      - SECRET_KEY=please-change-me    # 改成一串随机字符，容器重启后不用重新登录面板
+      # 可选：把 Telegram API 凭据用环境变量给（首次启动生效；也可留空，之后在面板/配置文件里填）
+      # - TG_API_ID=1234567
+      # - TG_API_HASH=0123456789abcdef0123456789abcdef
+    volumes:
+      - ./data:/data                   # 配置 / TG 会话 / 转发记录都在这里，别删
+```
 
-打开 `http://<主机IP>:9020`。就这样，不需要装 Python、不需要构建。
+### 2️⃣ 启动
+
+```bash
+docker compose up -d
+docker compose logs -f --tail=50       # 看到「消息监听已注册」就是好了；Ctrl+C 只退出看日志，不影响运行
+```
+
+### 3️⃣ 打开面板
+
+`http://<主机IP>:9020` ，初始密码 = 上面填的 `WEB_PASSWORD`（默认 `tgforward`）。
+然后按「第 0 步」准备 Telegram API 凭据 →「第 1 步」登录你自己的账号。
+
+**更新到最新版**：
+
+```bash
+docker compose pull && docker compose up -d      # data/ 不动，登录状态和规则都保留
+```
+
+> 不用 compose 的话，等价的单条命令：
+>
+> ```bash
+> docker run -d --name tg-forwarder --restart unless-stopped \
+>   -p 9020:9020 -e TZ=Asia/Shanghai \
+>   -e WEB_PASSWORD=tgforward -e SECRET_KEY=please-change-me \
+>   -v "$PWD/data:/data" \
+>   xiaoyu96/tg-forwarder:latest
+> ```
+>
+> 不想装 Python、不想构建 —— 全部东西都在镜像里。
 
 ### 第 0 步（必须）：准备 Telegram API ID / Hash
 
@@ -170,6 +231,7 @@ reset_panel_password.sh # 忘了密码、又没有恢复码时的兜底脚本（
 docker compose logs -f --tail=100     # 看日志
 docker compose restart                # 重启
 docker compose down                   # 停掉（./data 保留，随时 up -d 起回来）
+docker compose pull && docker compose up -d   # 更新到 Docker Hub 上的最新镜像
 docker compose up -d --build          # 改过源码后重建（配合 -f docker-compose.build.yml）
 ```
 

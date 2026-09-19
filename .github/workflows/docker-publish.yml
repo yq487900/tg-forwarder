@@ -11,6 +11,12 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    # 纯文档改动（README/LICENSE 等）不触发构建，省 CI 时间、也避免 mirror 出无意义的新镜像
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.dockerignore'
   pull_request:
     branches: [main]
   workflow_dispatch:

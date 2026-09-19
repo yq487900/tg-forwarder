@@ -24,9 +24,10 @@ services:
       - SECRET_KEY=${SECRET_KEY:-change-me-please}
       # 忘了密码又没有恢复码时，面板会提示用户跑这个脚本（宿主机上的路径）
       - RESET_SCRIPT=${RESET_SCRIPT:-./reset_panel_password.sh}
-      # 可选：不想把 api_id/api_hash 写进 config.json 时，在这里给（首次启动时生效）
-      # - TG_API_ID=1234567
-      # - TG_API_HASH=0123456789abcdef0123456789abcdef
+      # 可选：不想把 api_id/api_hash 写进 config.json 时，用环境变量给（首次启动时生效）
+      # 推荐在同目录 .env 里写 TG_API_ID=1234567 / TG_API_HASH=... ，这里保持原样即可
+      - TG_API_ID=${TG_API_ID:-}
+      - TG_API_HASH=${TG_API_HASH:-}
     volumes:
       # 配置 / TG 会话 / 转发记录都在这里（建议 600 权限，只在本机）
       - ./data:/data
