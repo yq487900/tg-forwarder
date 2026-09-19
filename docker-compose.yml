@@ -1,0 +1,35 @@
+# TG 频道转发 —— 一条命令拉起（用现成镜像，不需要构建）
+#
+#   docker compose up -d
+#
+# 然后浏览器打开：http://<主机IP>:9020
+#   · 初始面板密码：tgforward（进去后在「④ 面板设置」里随时改）
+#   · 第①块填 Telegram 手机号 → 收验证码 → 完成登录（只需一次）
+#
+# 建议在同目录建一个 .env（不会被提交），内容示例：
+#   WEB_PASSWORD=你自己的初始密码
+#   SECRET_KEY=一串随机字符        # 会话签名密钥；不设的话容器重启后需要重新登录面板
+services:
+  tg-forwarder:
+    image: yq487900/tg-forwarder:latest
+    container_name: tg-forwarder
+    restart: unless-stopped
+    ports:
+      - "9020:9020"
+    environment:
+      - TZ=Asia/Shanghai
+      # 面板密码：只是首次初始值（已有 data/config.json 时以里面的为准）
+      - WEB_PASSWORD=${WEB_PASSWORD:-tgforward}
+      # 会话签名密钥：固定下来，容器重启后不用重新登录面板
+      - SECRET_KEY=${SECRET_KEY:-change-me-please}
+      # 忘了密码又没有恢复码时，面板会提示用户跑这个脚本（宿主机上的路径）
+      - RESET_SCRIPT=${RESET_SCRIPT:-./reset_panel_password.sh}
+      # 可选：不想把 api_id/api_hash 写进 config.json 时，在这里给（首次启动时生效）
+      # - TG_API_ID=1234567
+      # - TG_API_HASH=0123456789abcdef0123456789abcdef
+    volumes:
+      # 配置 / TG 会话 / 转发记录都在这里（建议 600 权限，只在本机）
+      - ./data:/data
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

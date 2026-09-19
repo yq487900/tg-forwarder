@@ -1,0 +1,15 @@
+.git
+.github
+.gitignore
+data
+__pycache__
+*.pyc
+*.md
+*.session
+*.session-journal
+docker-compose*.yml
+reset_panel_password.sh
+.env
+.env.local
+*.bak
+*.tmp

@@ -1,0 +1,28 @@
+# 从源码本地构建（开发 / 自用部署用；不依赖 Docker Hub）
+#
+#   docker compose -f docker-compose.build.yml up -d --build
+#
+# 注意 network: host —— 宿主机若用了旁路由/Clash 这类 fake-ip DNS，
+# 默认 bridge 网络里 pip 会因为域名解析成假 IP 而失败。
+services:
+  tg-forwarder:
+    build:
+      context: .
+      network: host
+      args:
+        PIP_INDEX: ${PIP_INDEX:-}
+    image: tg-forwarder:local
+    container_name: tg-forwarder
+    restart: unless-stopped
+    ports:
+      - "9020:9020"
+    environment:
+      - TZ=Asia/Shanghai
+      - WEB_PASSWORD=${WEB_PASSWORD:-tgforward}
+      - SECRET_KEY=${SECRET_KEY:-change-me-please}
+      - RESET_SCRIPT=${RESET_SCRIPT:-./reset_panel_password.sh}
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

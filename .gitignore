@@ -1,0 +1,23 @@
+# 运行时数据（含 TG api_hash、面板密码/恢复码哈希、登录会话、转发记录）—— 绝对不要提交
+data/
+config.json
+forward.log
+*.session
+*.session-journal
+
+# 环境/密钥
+.env
+.env.local
+!.env.example
+
+# 备份与临时产物
+*.bak
+*.bak.*
+*.tmp
+*.trim
+
+# 系统垃圾
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

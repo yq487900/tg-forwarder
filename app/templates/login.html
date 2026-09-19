@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 · TG 频道转发</title>
+<style>
+  body{margin:0;background:#0f1720;color:#e8eef5;font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+       display:flex;align-items:center;justify-content:center;min-height:100vh;padding:18px 0}
+  .box{background:#18232e;border:1px solid #26384a;border-radius:14px;padding:24px;width:340px}
+  h1{font-size:17px;margin:0 0 14px}
+  label{display:block;font-size:12.5px;color:#93a6b8;margin:10px 0 4px}
+  input{width:100%;background:#0d151d;border:1px solid #26384a;color:#e8eef5;border-radius:8px;padding:10px;font-size:15px}
+  button{width:100%;margin-top:12px;background:#2da7ea;color:#04121b;border:0;border-radius:8px;padding:10px;font-size:15px;font-weight:600;cursor:pointer}
+  button.ghost{background:transparent;color:#93a6b8;border:1px solid #26384a;font-weight:500}
+  .err{color:#f0616d;font-size:13px;margin-top:10px}
+  .ok{color:#31c48d;font-size:13.5px;margin:8px 0;padding:10px;border:1px solid #31c48d;border-radius:8px}
+  .warn{color:#e3a008;font-size:12.5px;margin:8px 0;padding:10px;border:1px solid #4a3c14;border-radius:8px;background:#1e1a0f}
+  .hint{color:#93a6b8;font-size:12px;margin-top:12px}
+  a{color:#2da7ea;font-size:13px;text-decoration:none}
+  code{background:#0d151d;border:1px solid #26384a;border-radius:6px;padding:1px 5px;font-size:12px;word-break:break-all}
+  #forgotBox{border-top:1px solid #26384a;margin-top:14px;padding-top:6px}
+</style>
+</head>
+<body>
+  <div class="box">
+    <h1>🛰️ TG 频道转发</h1>
+
+    {% if forgot_done %}
+      <div class="ok">✅ 面板密码已重置为 <b>{{ new_password }}</b>，现在可以用它登录了。</div>
+      <div class="warn">新的恢复码（只显示这一次，请抄下来存好）：<br><code>{{ new_recovery }}</code></div>
+      <form method="get" action="/login"><button type="submit">去登录</button></form>
+
+    {% else %}
+      <form method="post" action="/login">
+        <input type="password" name="password" placeholder="面板密码" autofocus>
+        <button type="submit">进入</button>
+        {% if error %}<div class="err">{{ error }}</div>{% endif %}
+      </form>
+
+      <div style="margin-top:12px"><a href="#" onclick="toggleForgot();return false">忘记密码？</a></div>
+
+      <div id="forgotBox" style="display:{{ 'block' if forgot_open else 'none' }}">
+        {% if not has_recovery %}
+          <div class="warn">这台机器还没有设置「恢复码」，所以不能在这里自助重置。
+            <div style="margin-top:6px">① 登录面板后，在「⚙️ 面板设置 → 修改面板密码」里会同时生成一个恢复码，抄下来存好，以后就能自助重置；</div>
+            <div style="margin-top:6px">② 或者在本机运行这条命令，它会把面板密码重置成随机新密码并打印出来：<br><code>{{ reset_script }}</code></div>
+          </div>
+        {% else %}
+          <form method="post" action="/forgot">
+            <label>恢复码（形如 A1B2-C3D4-E5F6-7890，大小写和「-」都不影响）</label>
+            <input type="text" name="recovery_code" value="{{ recovery_code or '' }}" placeholder="A1B2-C3D4-E5F6-7890">
+            <label>新面板密码（至少 6 位）</label>
+            <input type="password" name="new_password">
+            <label>再输一次新密码</label>
+            <input type="password" name="new_password2">
+            <button type="submit">用恢复码重置密码</button>
+            {% if forgot_error %}<div class="err">{{ forgot_error }}</div>{% endif %}
+          </form>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    <div class="hint">面板密码可在登录后于「⚙️ 面板设置」里随时修改；compose 里的 WEB_PASSWORD 只是首次初始值。</div>
+  </div>
+<script>
+function toggleForgot(){
+  const b = document.getElementById('forgotBox');
+  if (!b) return;
+  b.style.display = (b.style.display === 'none' ? 'block' : 'none');
+}
+</script>
+</body>
+</html>
