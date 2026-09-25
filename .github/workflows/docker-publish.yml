@@ -25,7 +25,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write        # 打 tag 时创建 GitHub Release 需要写权限（构建/推送镜像本身不需要）
 
     steps:
       - name: Checkout
@@ -77,3 +77,15 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # 推送 v* tag 时自动建一个 GitHub Release（正文按 commit 自动生成；同 tag 重跑会更新而不是报错）。
+      # 注意：这一步只在 tag 上跑，推 main 不会创建 Release。
+      - name: 打 tag 时创建 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          make_latest: true

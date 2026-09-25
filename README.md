@@ -230,7 +230,8 @@ CI 跑完（约 2~4 分钟）镜像就绪，发布流程到此为止。部署机
 `docker compose pull && docker compose up -d`（见「运维」，`data/` 不动，登录状态和规则都保留），
 这一步属于日常运维、不是发布流程里必须的验证环节。
 
-CI 只在代码有变化时才构建（纯文档改动不触发）；发大版本时打个 tag：`git tag v1.0.1 && git push origin v1.0.1`。
+CI 只在代码有变化时才构建（纯文档改动不触发）；发大版本时打个 tag：`git tag v1.0.1 && git push origin v1.0.1`
+—— 推 tag 会构建**对应版本号**的镜像，并**自动创建一个同名的 GitHub Release**（正文按 commit 自动生成）。
 
 目录结构：
 
