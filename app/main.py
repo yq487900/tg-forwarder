@@ -472,26 +472,74 @@ class Worker:
         key = (self._norm_id(src), str(msg.grouped_id))
         slot = self._albums.get(key)
         if slot is None:
-            slot = {'msgs': {}, 'task': None}
+            slot = {'msgs': {}, 'task': None, 'flushing': False}
             self._albums[key] = slot
         slot['msgs'][msg.id] = msg
+        if slot.get('flushing'):
+            # 这一组正在转发：只并进缓存就够了（_flush_album 转发前会再取一次最新快照）。
+            # 这里若再起一个定时器，同一相册会被拆成两次转发。
+            return
         if slot['task']:
             slot['task'].cancel()
         slot['task'] = asyncio.ensure_future(self._flush_album(key, 1.2))
+
+    @staticmethod
+    def _album_msgs(slot):
+        return sorted(slot['msgs'].values(), key=lambda m: m.id)
+
+    async def _complete_album(self, msgs, slot=None):
+        """按 grouped_id 回服务端把整组捞齐，避免相册被拆成散条。
+
+        相册分片是逐条推送的，固定静默窗口偶尔会漏片：先到的几片会被当成一整组转发出去，
+        后到的分片又组成新的一组再转一次，观感上就是"相册被拆开"。这里以首片为锚点，
+        取 id 邻近范围内所有同 grouped_id 的消息补齐；捞不回来就原样返回，绝不影响正常转发。
+        """
+        if not msgs:
+            return msgs
+        gid = getattr(msgs[0], 'grouped_id', None)
+        if not gid:
+            return msgs
+        try:
+            anchor = msgs[0]
+            ids = [anchor.id + k for k in range(-12, 13) if anchor.id + k > 0]
+            around = await self.client.get_messages(anchor.chat_id, ids=ids)
+            merged = {m.id: m for m in msgs}
+            added = 0
+            for x in (around or []):
+                if x is None or getattr(x, 'grouped_id', None) != gid:
+                    continue
+                if slot is not None:
+                    slot['msgs'][x.id] = x          # 同步回缓存，供下一次取快照时用
+                if x.id not in merged:
+                    merged[x.id] = x
+                    added += 1
+            if added:
+                log.info('相册补全 gid=%s：补回 %d 片 → 共 %d 片', gid, added, len(merged))
+            return sorted(merged.values(), key=lambda m: m.id)
+        except Exception as e:
+            log.warning('相册补全失败（按已聚合的 %d 片转发）：%s', len(msgs), e)
+            return msgs
 
     async def _flush_album(self, key, delay):
         try:
             await asyncio.sleep(delay)
         except asyncio.CancelledError:
             return
-        slot = self._albums.pop(key, None)
+        slot = self._albums.get(key)
         if not slot:
             return
-        msgs = sorted(slot['msgs'].values(), key=lambda m: m.id)
-        if not msgs:
-            return
-        src_norm, gid = key
+        slot['flushing'] = True        # 之后的同组新分片只并入缓存，不再另起一次转发
+        slot['task'] = None
         try:
+            # 先按 grouped_id 回服务端把整组捞齐（分片晚到也不会漏）
+            msgs = await self._complete_album(self._album_msgs(slot), slot)
+            if len(msgs) == 1:
+                # 只聚合到 1 片，几乎必然是漏片（相册至少 2 片）：缓 1 秒再补捞一次
+                await asyncio.sleep(1.0)
+                msgs = await self._complete_album(self._album_msgs(slot), slot)
+            if not msgs:
+                return
+            src_norm, gid = key
             cfg = load_config()
             text = self._group_text(msgs)
             log.info('来源相册 gid=%s | %d 条 | %s', gid, len(msgs), text[:60].replace('\n', ' '))
@@ -508,6 +556,8 @@ class Worker:
         except Exception as e:
             log.exception('处理相册出错')
             append_log('❌ 处理相册出错：%s' % e)
+        finally:
+            self._albums.pop(key, None)
 
     def _group_text(self, msgs):
         return '\n'.join([self._msg_text(m) for m in msgs if self._msg_text(m)])
