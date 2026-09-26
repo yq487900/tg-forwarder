@@ -25,11 +25,13 @@ DATA_DIR = os.environ.get('DATA_DIR', '/data')
 CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 SESSION_PATH = os.path.join(DATA_DIR, 'tg')
 LOG_PATH = os.path.join(DATA_DIR, 'forward.log')
+STATE_PATH = os.path.join(DATA_DIR, 'state.json')      # 补偿扫描的水位线（各源已处理到的最大消息 id）
 # 用可重入锁：load_config() 在首次运行（还没有 config.json）时会调用 save_config()，
 # 两者都要这把锁；普通 Lock 会在这里自锁死（表现为面板打不开、config.json 一直不生成）。
 CONFIG_LOCK = threading.RLock()
 
 LOG_KEEP_DEFAULT = 500          # 最近记录默认最多保留多少条（超出自动清理，0=不限）
+RECONCILE_DEFAULT = 300         # 补偿扫描默认间隔（秒）；0=关闭
 
 DEFAULT_CONFIG = {
     'web': {'password': os.environ.get('WEB_PASSWORD', 'tgforward'),
@@ -41,6 +43,7 @@ DEFAULT_CONFIG = {
     'rules': [],
     'media_max_mb': 1800,
     'log_max_lines': LOG_KEEP_DEFAULT,
+    'reconcile_seconds': RECONCILE_DEFAULT,   # 补偿扫描间隔（秒）；0=关闭
 }
 
 MIN_PW_LEN = 6
@@ -86,6 +89,89 @@ def save_config(cfg):
             os.chmod(CONFIG_PATH, 0o600)
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------- state（补偿扫描水位线）
+STATE_LOCK = threading.RLock()
+_STATE = None
+
+
+def load_state():
+    """读取 state.json（各源频道已处理到的最大消息 id）。缺失/损坏都返回空结构，绝不抛。"""
+    global _STATE
+    with STATE_LOCK:
+        if _STATE is not None:
+            return _STATE
+        try:
+            with open(STATE_PATH, encoding='utf-8') as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:
+            data = {}
+        data.setdefault('processed', {})
+        _STATE = data
+        return _STATE
+
+
+def save_state():
+    """原子落盘 state.json（权限 600）。失败只记日志，不影响转发。"""
+    with STATE_LOCK:
+        if _STATE is None:
+            return
+        try:
+            tmp = STATE_PATH + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(_STATE, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, STATE_PATH)
+            try:
+                os.chmod(STATE_PATH, 0o600)
+            except Exception:
+                pass
+        except Exception as e:
+            log.warning('写入 state.json 失败：%s', e)
+
+
+def _norm_chan(chat_id):
+    """把 -1001234567890 / 1234567890 归一化成同一串数字。
+    与 Worker._norm_id 同规则，但做成模块级函数供水位线复用（避免调用方传原始 id 导致 key 不一致）。"""
+    s = str(chat_id or '').strip()
+    d = ''.join(ch for ch in s if ch.isdigit())
+    if d.startswith('100') and len(d) > 11:
+        d = d[3:]
+    return d
+
+
+def get_watermark(src_key):
+    """取某个源频道「已处理到的最大消息 id」；没有返回 0。"""
+    st = load_state()
+    rec = (st.get('processed') or {}).get(_norm_chan(src_key)) or {}
+    try:
+        return int(rec.get('max_id') or 0)
+    except Exception:
+        return 0
+
+
+def bump_watermark(src_key, max_id, flush=False):
+    """抬高水位线（只增不减）。flush=True 时立即落盘。key 内部统一归一化。"""
+    if not max_id:
+        return
+    k = _norm_chan(src_key)
+    if not k:
+        return
+    with STATE_LOCK:
+        st = load_state()
+        rec = st['processed'].setdefault(k, {})
+        try:
+            cur = int(rec.get('max_id') or 0)
+        except Exception:
+            cur = 0
+        if int(max_id) > cur:
+            rec['max_id'] = int(max_id)
+            rec['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    if flush:
+        save_state()
+
 
 
 def log_keep():
@@ -341,6 +427,18 @@ class Worker:
                 log.info('未登录，等待在面板完成登录')
             self.client.add_event_handler(self._on_message, events.NewMessage())
             log.info('消息监听已注册（NewMessage + 自管相册聚合）')
+            # 启动补偿扫描：治「重启/重连窗口内漏掉的消息」
+            try:
+                for rule in (cfg.get('rules') or []):
+                    if rule.get('enabled'):
+                        try:
+                            await self._reconcile_source(rule)
+                        except Exception as e:
+                            log.warning('启动补偿扫描失败（%s）：%s', rule.get('name'), e)
+            except Exception as e:
+                log.warning('启动补偿扫描出错：%s', e)
+            # 定时补偿扫描：治「运行期事件推送漏帧」
+            asyncio.ensure_future(self._reconcile_loop())
         except Exception as e:
             self.state['error'] = '连接失败：%s' % e
             log.exception('启动失败')
@@ -463,6 +561,8 @@ class Worker:
                     append_log('跳过 [%s] %s' % (rule.get('name') or idx + 1, why))
                     continue
                 await self._deliver(rule, msg, why)
+            # 单条消息也抬水位线（含被规则过滤掉的），避免补偿扫描反复重扫
+            bump_watermark(self._norm_id(src), msg.id)
         except Exception as e:
             log.exception('处理消息出错')
             append_log('❌ 处理消息出错：%s' % e)
@@ -472,16 +572,40 @@ class Worker:
         key = (self._norm_id(src), str(msg.grouped_id))
         slot = self._albums.get(key)
         if slot is None:
-            slot = {'msgs': {}, 'task': None, 'flushing': False}
+            slot = {'msgs': {}, 'task': None, 'flushing': False, 'last_seen': 0.0}
             self._albums[key] = slot
         slot['msgs'][msg.id] = msg
+        slot['last_seen'] = time.monotonic()   # 只刷新时间戳，不去 cancel 定时器
         if slot.get('flushing'):
             # 这一组正在转发：只并进缓存就够了（_flush_album 转发前会再取一次最新快照）。
-            # 这里若再起一个定时器，同一相册会被拆成两次转发。
             return
-        if slot['task']:
-            slot['task'].cancel()
-        slot['task'] = asyncio.ensure_future(self._flush_album(key, 1.2))
+        if not slot['task']:
+            # 只在「该组首次分片」时起一个常驻收尾协程。
+            # 旧实现是「每个分片都 cancel 上一个计时器再重建」，当取消恰好落在
+            # _flush_album 的 await 挂起期间时，CancelledError 会穿透到 finally 把
+            # slot 从字典里 pop 掉，导致该组后续分片另起一个全新 slot、而本次转发被
+            # 中途丢弃 —— 这是相册「整组漏转」的直接原因之一。
+            slot['task'] = asyncio.ensure_future(self._settle_album(key))
+
+    async def _settle_album(self, key, quiet=1.5, hard=8.0, tick=0.25):
+        """静默收尾：距最后一次分片到达超过 quiet 秒即转发；最长 hard 秒强制收尾。
+
+        用「时间戳轮询」替代「cancel + 重排」，既没有取消竞态，又能在长视频组
+        分片持续到达时靠 hard 上限保底，不会像固定 1.2 秒窗口那样把长组拆条。
+        """
+        start = time.monotonic()
+        while True:
+            try:
+                await asyncio.sleep(tick)
+            except asyncio.CancelledError:
+                return
+            slot = self._albums.get(key)
+            if not slot:
+                return
+            now = time.monotonic()
+            if now - float(slot.get('last_seen') or 0) >= quiet or now - start >= hard:
+                break
+        await self._flush_album(key)
 
     @staticmethod
     def _album_msgs(slot):
@@ -501,7 +625,12 @@ class Worker:
             return msgs
         try:
             anchor = msgs[0]
-            ids = [anchor.id + k for k in range(-12, 13) if anchor.id + k > 0]
+            # 回捞范围：向前留 3 条余量，向后最多探 20 条。
+            # 旧实现是固定 ±12，一是会无谓地跨到邻组（虽然后面按 gid 过滤掉了，
+            # 但请求量放大一倍），二是当一组超过 13 片时向后覆盖不够。
+            lo = max(1, min(m.id for m in msgs) - 3)
+            hi = max(m.id for m in msgs) + 20
+            ids = list(range(lo, hi + 1))
             around = await self.client.get_messages(anchor.chat_id, ids=ids)
             merged = {m.id: m for m in msgs}
             added = 0
@@ -520,11 +649,7 @@ class Worker:
             log.warning('相册补全失败（按已聚合的 %d 片转发）：%s', len(msgs), e)
             return msgs
 
-    async def _flush_album(self, key, delay):
-        try:
-            await asyncio.sleep(delay)
-        except asyncio.CancelledError:
-            return
+    async def _flush_album(self, key):
         slot = self._albums.get(key)
         if not slot:
             return
@@ -553,6 +678,9 @@ class Worker:
                     append_log('跳过 [%s] 相册(%d条) %s' % (rule.get('name') or idx + 1, len(msgs), why))
                     continue
                 await self._deliver_group(rule, msgs, why)
+            # 整组处理完（无论命中与否）都把水位线抬到该组最大 id：
+            # 未命中的组也算「已处理」，否则补偿扫描会一遍遍重扫同一批。
+            bump_watermark(src_norm, max(m.id for m in msgs))
         except Exception as e:
             log.exception('处理相册出错')
             append_log('❌ 处理相册出错：%s' % e)
@@ -561,6 +689,93 @@ class Worker:
 
     def _group_text(self, msgs):
         return '\n'.join([self._msg_text(m) for m in msgs if self._msg_text(m)])
+
+    # ---- 补偿扫描（水位线对账）
+    async def _reconcile_source(self, rule, limit=200):
+        """按水位线回扫源频道，把「事件推送漏掉、但服务端确实存在」的组补转。
+
+        动机：相册聚合的入口只有 events.NewMessage 推送。源频道在静默期后是「批量推」的
+        （前面还常带一条无 grouped_id 的广告图），首批分片存在被削顶/丢帧的可能，此时该组
+        永远不会进 _buffer_album，_complete_album 也就永远不会以它为锚点触发 —— 表现为
+        「整组相册完全没转发」。这里用 min_id 水位线做兜底对账。
+        """
+        src = str(rule.get('source') or '').strip()
+        target = str(rule.get('target') or '').strip()
+        name = rule.get('name') or '规则'
+        if not src or not target:
+            return 0
+        src_key = self._norm_id(src)
+        entity = await self._resolve(src)
+        wm = get_watermark(src_key)
+        if not wm:
+            # 首次运行：只把水位线对齐到当前最新一条，不回补历史（避免刷屏）
+            latest = await self.client.get_messages(entity, limit=1)
+            if latest:
+                bump_watermark(src_key, latest[0].id, flush=True)
+                log.info('补偿扫描首次运行：源 %s 水位线初始化为 %d', src, latest[0].id)
+            return 0
+
+        msgs = await self.client.get_messages(entity, min_id=wm, limit=limit)
+        if not msgs:
+            return 0
+        # 按 grouped_id 分组（无 gid 的各自成组）
+        groups, order = {}, []
+        for m in sorted(msgs, key=lambda x: x.id):
+            gid = getattr(m, 'grouped_id', None)
+            k = ('g', str(gid)) if gid else ('m', m.id)
+            if k not in groups:
+                groups[k] = []
+                order.append(k)
+            groups[k].append(m)
+
+        healed = 0
+        top = wm
+        for k in order:
+            grp = sorted(groups[k], key=lambda x: x.id)
+            top = max(top, max(m.id for m in grp))
+            # 正在缓存里等收尾的组交给正常流程，别重复转发
+            if k[0] == 'g' and (src_key, k[1]) in self._albums:
+                continue
+            text = self._group_text(grp) if len(grp) > 1 else self._msg_text(grp[0])
+            ok, why = rule_matches(rule, text)
+            if not ok:
+                continue
+            _kind = '相册%d条' % len(grp) if len(grp) > 1 else '单条'
+            log.info('补偿扫描命中漏组：源=%s %s ids=%d..%d', src, _kind,
+                     grp[0].id, grp[-1].id)
+            if len(grp) > 1:
+                await self._deliver_group(rule, grp, '补扫｜' + why)
+            else:
+                await self._deliver(rule, grp[0], '补扫｜' + why)
+            healed += 1
+        bump_watermark(src_key, top, flush=True)
+        if healed:
+            log.info('补偿扫描完成：源=%s 水位 %d→%d，补转 %d 组', src, wm, top, healed)
+        return healed
+
+    async def _reconcile_loop(self):
+        """定时补偿扫描：每 reconcile_seconds 秒跑一次（0=关闭）。"""
+        while True:
+            try:
+                secs = int(load_config().get('reconcile_seconds', RECONCILE_DEFAULT) or 0)
+            except Exception:
+                secs = RECONCILE_DEFAULT
+            if secs <= 0:
+                await asyncio.sleep(60)
+                continue
+            await asyncio.sleep(secs)
+            try:
+                if not (self.client and self.client.is_connected()):
+                    continue
+                for rule in (load_config().get('rules') or []):
+                    if not rule.get('enabled'):
+                        continue
+                    try:
+                        await self._reconcile_source(rule)
+                    except Exception as e:
+                        log.warning('补偿扫描失败（%s）：%s', rule.get('name'), e)
+            except Exception as e:
+                log.warning('补偿扫描循环出错：%s', e)
 
     async def _deliver_group(self, rule, msgs, why=''):
         """整组转发（保持相册格式）；失败时按规则降级"""
